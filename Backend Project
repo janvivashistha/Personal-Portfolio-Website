@@ -1,0 +1,288 @@
+import mysql.connector as mycon
+from datetime import datetime
+
+# ----------------- Database Setup -----------------
+def connect_db():
+    """Connect to the main database."""
+    return mycon.connect(host='127.0.0.1', user='root', passwd='Password@123', database='The_Rhythm_Experts')
+
+def setup_db():
+    """Create database and tables if they don't exist."""
+    conn = mycon.connect(host='127.0.0.1', user='root', passwd='Password@123')
+    cursor = conn.cursor()
+    cursor.execute("CREATE DATABASE IF NOT EXISTS The_Rhythm_Experts")
+    cursor.execute("USE The_Rhythm_Experts")
+
+    # Create tables
+    cursor.execute("CREATE TABLE IF NOT EXISTS login(username VARCHAR(50) NOT NULL, password VARCHAR(50) NOT NULL)")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS stock(
+                        pcode INT PRIMARY KEY,
+                        product_name VARCHAR(50) NOT NULL,
+                        product_quantity INT NOT NULL,
+                        product_price INT NOT NULL)""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS purchase(
+                        order_id INT AUTO_INCREMENT PRIMARY KEY,
+                        order_date DATE NOT NULL,
+                        customer_name VARCHAR(50) NOT NULL,
+                        pcode INT NOT NULL,
+                        quantity_bought INT NOT NULL,
+                        amount INT NOT NULL,
+                        FOREIGN KEY (pcode) REFERENCES stock(pcode))""")
+    conn.commit()
+
+    # Insert default admin if table is empty
+    cursor.execute("SELECT COUNT(*) FROM login")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO login VALUES (%s, %s)", ("admin", "music"))
+        conn.commit()
+    conn.close()
+
+# ----------------- Admin Functions -----------------
+def admin_login():
+    conn = connect_db()
+    cursor = conn.cursor()
+    passwd = input("Enter admin password: ")
+    cursor.execute("SELECT * FROM login")
+    username, password = cursor.fetchone()
+    if passwd == password:
+        print("✅ Login Successful!")
+        admin_menu()
+    else:
+        print("❌ Wrong Password")
+    conn.close()
+
+def admin_menu():
+    while True:
+        print("""
+--- ADMIN MENU ---
+1. Add new item
+2. Update price
+3. Delete item
+4. Display all items
+5. Change password
+6. Logout
+""")
+        choice = input("Enter choice: ")
+        if choice == "1":
+            add_item()
+        elif choice == "2":
+            update_price()
+        elif choice == "3":
+            delete_item()
+        elif choice == "4":
+            display_items()
+        elif choice == "5":
+            change_password()
+        elif choice == "6":
+            break
+        else:
+            print("⚠️ Invalid choice. Try again.")
+
+def add_item():
+    conn = connect_db()
+    cursor = conn.cursor()
+    try:
+        pcode = int(input("Enter product code: "))
+        pname = input("Enter product name: ")
+        qty = int(input("Enter product quantity: "))
+        price = int(input("Enter product price: "))
+        cursor.execute("INSERT INTO stock VALUES (%s, %s, %s, %s)", (pcode, pname, qty, price))
+        conn.commit()
+        print("✅ Item added successfully.")
+    except Exception as e:
+        print("⚠️ Error:", e)
+    conn.close()
+
+def update_price():
+    conn = connect_db()
+    cursor = conn.cursor()
+    pcode = int(input("Enter product code: "))
+    new_price = int(input("Enter new price: "))
+    cursor.execute("UPDATE stock SET product_price=%s WHERE pcode=%s", (new_price, pcode))
+    conn.commit()
+    print("✅ Price updated.")
+    conn.close()
+
+def delete_item():
+    conn = connect_db()
+    cursor = conn.cursor()
+    pcode = int(input("Enter product code: "))
+    cursor.execute("DELETE FROM stock WHERE pcode=%s", (pcode,))
+    conn.commit()
+    print("✅ Item deleted.")
+    conn.close()
+
+def display_items():
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM stock")
+    print("\n--- STOCK LIST ---")
+    print("Code | Name | Quantity | Price")
+    print("--------------------------------")
+    for row in cursor:
+        print(f"{row[0]} | {row[1]} | {row[2]} | ₹{row[3]}")
+    conn.close()
+
+def change_password():
+    conn = connect_db()
+    cursor = conn.cursor()
+    old_pass = input("Enter old password: ")
+    cursor.execute("SELECT password FROM login")
+    db_pass = cursor.fetchone()[0]
+    if old_pass == db_pass:
+        new_pass = input("Enter new password: ")
+        cursor.execute("UPDATE login SET password=%s", (new_pass,))
+        conn.commit()
+        print("✅ Password changed successfully.")
+    else:
+        print("❌ Wrong old password.")
+    conn.close()
+
+# ----------------- Customer Functions -----------------
+def customer_menu():
+    while True:
+        print("""
+--- CUSTOMER MENU ---
+1. Add to Bucket
+2. View Bucket
+3. View Invoice
+4. Shop More
+5. Back to Home
+""")
+        choice = input("Enter choice: ")
+        if choice == "1":
+            add_to_bucket()
+        elif choice == "2":
+            view_bucket()
+        elif choice == "3":
+            view_invoice()
+        elif choice == "4":
+            shop_more()
+        elif choice == "5":
+            break
+        else:
+            print("⚠️ Invalid choice.")
+
+def add_to_bucket():
+    conn = connect_db()
+    cursor = conn.cursor()
+    name = input("Enter your name: ")
+    pcode = int(input("Enter product code: "))
+    qty = int(input("Enter quantity: "))
+
+    # Check stock availability
+    cursor.execute("SELECT product_quantity, product_price FROM stock WHERE pcode=%s", (pcode,))
+    result = cursor.fetchone()
+    if result:
+        available_qty, price = result
+        if qty <= available_qty:
+            amount = qty * price
+            new_qty = available_qty - qty
+            cursor.execute("UPDATE stock SET product_quantity=%s WHERE pcode=%s", (new_qty, pcode))
+            cursor.execute("INSERT INTO purchase(order_date, customer_name, pcode, quantity_bought, amount) VALUES (%s,%s,%s,%s,%s)",
+                           (datetime.now().date(), name, pcode, qty, amount))
+            conn.commit()
+            print("✅ Item added to bucket.")
+        else:
+            print("⚠️ Not enough stock available.")
+    else:
+        print("⚠️ Invalid product code.")
+    conn.close()
+
+def view_bucket():
+    conn = connect_db()
+    cursor = conn.cursor()
+    name = input("Enter your name: ")
+    cursor.execute("""SELECT s.pcode, s.product_name, p.quantity_bought, s.product_price
+                      FROM stock s JOIN purchase p ON s.pcode=p.pcode
+                      WHERE p.customer_name=%s""", (name,))
+    rows = cursor.fetchall()
+    if not rows:
+        print("⚠️ No items in bucket.")
+        return
+    print("\n--- YOUR BUCKET ---")
+    for row in rows:
+        print(f"{row[0]} | {row[1]} | {row[2]} | ₹{row[3]}")
+    conn.close()
+
+def view_invoice():
+    conn = connect_db()
+    cursor = conn.cursor()
+    name = input("Enter your name: ")
+    cursor.execute("""SELECT s.pcode, s.product_name, p.quantity_bought, p.amount
+                      FROM stock s JOIN purchase p ON s.pcode=p.pcode
+                      WHERE p.customer_name=%s""", (name,))
+    rows = cursor.fetchall()
+
+    if not rows:
+        print("⚠️ No purchases found for this customer.")
+        return
+
+    print("\n--- INVOICE ---")
+    invoice_text = []
+    total = 0
+    invoice_text.append("=== THE RHYTHM EXPERTS INVOICE ===")
+    invoice_text.append(f"Customer: {name}")
+    invoice_text.append(f"Date: {datetime.now().date()}")
+    invoice_text.append("-----------------------------------")
+    invoice_text.append("Code | Name | Quantity | Amount")
+
+    for row in rows:
+        line = f"{row[0]} | {row[1]} | {row[2]} | ₹{row[3]}"
+        print(line)
+        invoice_text.append(line)
+        total += row[3]
+
+    invoice_text.append("-----------------------------------")
+    invoice_text.append(f"Grand Total: ₹{total}")
+    invoice_text.append("=== THANK YOU FOR SHOPPING! ===")
+
+    print(f"\nGrand Total: ₹{total}")
+
+    # Save option
+    save_choice = input("\nDo you want to save this invoice as a file? (yes/no): ").strip().lower()
+    if save_choice == "yes":
+        filename = f"invoice_{name}.txt"
+        with open(filename, "w") as f:
+            for line in invoice_text:
+                f.write(line + "\n")
+        print(f"✅ Invoice saved as {filename}")
+    conn.close()
+
+def shop_more():
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT pcode, product_name, product_price FROM stock")
+    print("\n--- SHOP MORE ---")
+    for row in cursor:
+        print(f"{row[0]} | {row[1]} | ₹{row[2]}")
+    conn.close()
+
+# ----------------- Main Program -----------------
+def main():
+    setup_db()
+    print("""
+|| THE RHYTHM EXPERTS ||
+Inventory & Customer Management System
+Designed by Janvi Vashistha
+""")
+    while True:
+        print("""
+--- HOME PAGE ---
+1. Admin
+2. Customer
+3. Exit
+""")
+        choice = input("Enter choice: ")
+        if choice == "1":
+            admin_login()
+        elif choice == "2":
+            customer_menu()
+        elif choice == "3":
+            print("👋 Thank you for visiting!")
+            break
+        else:
+            print("⚠️ Invalid choice.")
+
+if __name__ == "__main__":
+    main()
